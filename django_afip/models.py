@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import base64
 import logging
 import os
@@ -7,7 +9,10 @@ from datetime import timedelta
 from datetime import timezone
 from io import BytesIO
 from tempfile import NamedTemporaryFile
+from typing import BinaryIO
 from typing import List
+from typing import NoReturn
+from typing import Optional
 from typing import Type
 from uuid import uuid4
 
@@ -15,6 +20,7 @@ import pytz
 from django.conf import settings
 from django.core import management
 from django.core.files import File
+from django.core.files.storage import Storage
 from django.db import models
 from django.db.models import Count
 from django.db.models import Sum
@@ -23,6 +29,9 @@ from django.utils.translation import gettext_lazy as _
 from django_renderpdf.helpers import render_pdf
 from lxml import etree
 from lxml.builder import E
+from OpenSSL.crypto import FILETYPE_PEM
+from OpenSSL.crypto import load_certificate
+from OpenSSL.crypto import X509
 from zeep.exceptions import Fault
 
 from . import clients
@@ -60,7 +69,7 @@ CLIENT_VAT_CONDITIONS = (
 )
 
 
-def load_metadata():
+def load_metadata() -> NoReturn:
     """Loads metadata from fixtures into the database."""
 
     for model in GenericAfipType.SUBCLASSES:
@@ -68,7 +77,7 @@ def load_metadata():
         management.call_command("loaddata", label, app="afip")
 
 
-def check_response(response):
+def check_response(response) -> NoReturn:
     """
     Check that a response is not an error.
 
@@ -85,7 +94,7 @@ def check_response(response):
         raise exceptions.AfipException(response)
 
 
-def first_currency():
+def first_currency() -> Optional[int]:
     """
     Returns the id for the first currency
 
@@ -98,7 +107,7 @@ def first_currency():
         return ct.pk
 
 
-def _get_storage_from_settings(setting_name=None):
+def _get_storage_from_settings(setting_name: str = None) -> Storage:
     path = getattr(settings, setting_name, None)
     if not path:
         return import_string(settings.DEFAULT_FILE_STORAGE)()
@@ -108,7 +117,7 @@ def _get_storage_from_settings(setting_name=None):
 class GenericAfipTypeManager(models.Manager):
     """Default Manager for GenericAfipType."""
 
-    def __init__(self, service_name, type_name):
+    def __init__(self, service_name: str, type_name: str):
         """
         Create a new Manager instance for a GenericAfipType.
 
@@ -119,13 +128,11 @@ class GenericAfipTypeManager(models.Manager):
         self.__service_name = service_name
         self.__type_name = type_name
 
-    def populate(self, ticket=None):
+    def populate(self, ticket: AuthTicket = None) -> NoReturn:
         """Fetch and save data for this model from AFIP's WS.
 
         Direct usage of this method is discouraged, use
         :func:`~.models.load_metadata` instead.
-
-        If no ticket is provided, the most recent available one will be used.
         """
         ticket = ticket or AuthTicket.objects.get_any_active("wsfe")
         client = clients.get_client("wsfe", ticket.owner.is_sandboxed)
@@ -193,8 +200,7 @@ class GenericAfipType(models.Model):
 
 
 class ReceiptType(GenericAfipType):
-    """
-    An AFIP receipt type.
+    """An AFIP receipt type.
 
     See the AFIP's documentation for details on each receipt type.
     """
@@ -298,14 +304,14 @@ class TaxPayer(models.Model):
         help_text=_("A friendly name to recognize this taxpayer."),
     )
     key = models.FileField(
-        _("key"),
+        verbose_name=_("key"),
         upload_to="afip/taxpayers/keys/",
         storage=_get_storage_from_settings("AFIP_KEY_STORAGE"),
         blank=True,
         null=True,
     )
     certificate = models.FileField(
-        _("certificate"),
+        verbose_name=_("certificate"),
         upload_to="afip/taxpayers/certs/",
         storage=_get_storage_from_settings("AFIP_CERT_STORAGE"),
         blank=True,
@@ -355,14 +361,20 @@ class TaxPayer(models.Model):
         )
 
     @property
-    def certificate_object(self):
-        """Return the certificate as an OpenSSL object."""
+    def certificate_object(self) -> X509:
+        """
+        Returns the certificate as an OpenSSL object
+
+        Returns the certificate as an OpenSSL object (rather than as a file
+        object).
+        """
+
         if not self.certificate:
             return None
         self.certificate.seek(0)
-        return crypto.parse_certificate(self.certificate.read())
+        return load_certificate(FILETYPE_PEM, self.certificate.read())
 
-    def get_certificate_expiration(self):
+    def get_certificate_expiration(self) -> datetime:
         """
         Gets the certificate expiration from the certificate
 
@@ -376,7 +388,7 @@ class TaxPayer(models.Model):
         dt = datetime.strptime(datestring, "%Y%m%d%H%M%SZ")
         return dt.replace(tzinfo=timezone.utc)
 
-    def generate_key(self, force=False):
+    def generate_key(self, force=False) -> bool:
         """
         Creates a key file for this TaxPayer
 
@@ -399,7 +411,7 @@ class TaxPayer(models.Model):
 
         return True
 
-    def generate_csr(self, basename="djangoafip"):
+    def generate_csr(self, basename="djangoafip") -> BinaryIO:
         """
         Creates a CSR for this TaxPayer's key
 
@@ -417,19 +429,20 @@ class TaxPayer(models.Model):
         csr.seek(0)
         return csr
 
-    def create_ticket(self, service):
+    def create_ticket(self, service: str) -> AuthTicket:
         """Create an AuthTicket for a given service."""
         ticket = AuthTicket(owner=self, service=service)
         ticket.authorize()
         return ticket
 
-    def get_ticket(self, service):
-        """Return an existing AuthTicket for a given service."""
+    def get_ticket(self, service: str) -> Optional[AuthTicket]:
+        """Return an existing AuthTicket for a given service, if any."""
         return self.auth_tickets.filter(
-            expires__gt=datetime.now(timezone.utc), service=service
+            expires__gt=datetime.now(timezone.utc),
+            service=service,
         ).last()
 
-    def get_or_create_ticket(self, service):
+    def get_or_create_ticket(self, service: str):
         """
         Return or create a new AuthTicket for a given serivce.
 
@@ -441,7 +454,7 @@ class TaxPayer(models.Model):
         """
         return self.get_ticket(service) or self.create_ticket(service)
 
-    def fetch_points_of_sales(self, ticket=None):
+    def fetch_points_of_sales(self, ticket: AuthTicket = None):
         """
         Fetch all point of sales objects.
 
@@ -600,7 +613,7 @@ class PointOfSales(models.Model):
 
 
 class AuthTicketManager(models.Manager):
-    def get_any_active(self, service):
+    def get_any_active(self, service: str) -> AuthTicket:
         ticket = AuthTicket.objects.filter(
             token__isnull=False,
             expires__gt=datetime.now(timezone.utc),
@@ -628,14 +641,17 @@ class AuthTicket(models.Model):
     themselves; most services will find or create one as necessary.
     """
 
-    def default_generated():
+    @staticmethod
+    def default_generated() -> datetime:
         return datetime.now(TZ_AR)
 
-    def default_expires():
+    @staticmethod
+    def default_expires() -> datetime:
         tomorrow = datetime.now(TZ_AR) + timedelta(hours=12)
         return tomorrow
 
-    def default_unique_id():
+    @staticmethod
+    def default_unique_id() -> int:
         return random.randint(0, 2147483647)
 
     owner = models.ForeignKey(
@@ -695,7 +711,7 @@ class AuthTicket(models.Model):
 
         return crypto.create_embeded_pkcs7_signature(request, cert, key)
 
-    def authorize(self):
+    def authorize(self) -> NoReturn:
         """Send this ticket to AFIP for authorization."""
         request = self.__create_request_xml()
         request = self.__sign_request(request)
@@ -728,7 +744,7 @@ class AuthTicket(models.Model):
 class ReceiptQuerySet(models.QuerySet):
     """The default queryset obtains when querying via :class:`~.ReceiptManager`."""
 
-    def _assign_numbers(self):
+    def _assign_numbers(self) -> NoReturn:
         """Assign numbers in preparation for validating these receipts.
 
         WARNING: Don't call the method manually unless you know what you're
@@ -772,7 +788,7 @@ class ReceiptQuerySet(models.QuerySet):
 
         return self
 
-    def validate(self, ticket=None):
+    def validate(self, ticket: AuthTicket = None):
         """Validate all receipts matching this queryset.
 
         Note that, due to how AFIP implements its numbering, this method is not
@@ -1032,19 +1048,19 @@ class Receipt(models.Model):
     # TODO: methods to validate totals
 
     @property
-    def total_vat(self):
+    def total_vat(self) -> int:
         """Returns the sum of all Vat objects."""
         q = Vat.objects.filter(receipt=self).aggregate(total=Sum("amount"))
         return q["total"] or 0
 
     @property
-    def total_tax(self):
+    def total_tax(self) -> int:
         """Returns the sum of all Tax objects."""
         q = Tax.objects.filter(receipt=self).aggregate(total=Sum("amount"))
         return q["total"] or 0
 
     @property
-    def formatted_number(self):
+    def formatted_number(self) -> Optional[str]:
         """This receipt's number in the usual format: ``0001-00003087``."""
         if self.receipt_number:
             return "{:04d}-{:08d}".format(
@@ -1076,8 +1092,8 @@ class Receipt(models.Model):
         except ReceiptValidation.DoesNotExist:
             return False
 
-    def validate(self, ticket=None, raise_=False):
-        """Validate this receipt.
+    def validate(self, ticket: AuthTicket = None, raise_=False):
+        """Validates this receipt.
 
         This is a shortcut to :class:`~.ReceiptQuerySet`'s method of the same
         name. Calling this validates only this instance.
@@ -1119,7 +1135,7 @@ class Receipt(models.Model):
 
 
 class ReceiptPDFManager(models.Manager):
-    def create_for_receipt(self, receipt: Receipt, **kwargs):
+    def create_for_receipt(self, receipt, **kwargs) -> ReceiptPDF:
         """Creates a ReceiptPDF object for a given receipt.
 
         Does not actually generate the related PDF file.
@@ -1168,7 +1184,7 @@ class ReceiptPDF(models.Model):
     PDF generation is skipped if the receipt has not been validated.
     """
 
-    def upload_to(self, filename="untitled", instance=None):
+    def upload_to(self, filename="untitled", instance=None) -> str:
         """
         Returns the full path for generated receipts.
 
@@ -1251,7 +1267,7 @@ class ReceiptPDF(models.Model):
 
     objects = ReceiptPDFManager()
 
-    def save_pdf(self, save_model: bool = True):
+    def save_pdf(self, save_model: bool = True) -> NoReturn:
         """
         Save the receipt as a PDF related to this model.
 
@@ -1324,7 +1340,7 @@ class ReceiptEntry(models.Model):
     )
 
     @property
-    def total_price(self):
+    def total_price(self) -> int:
         """The total price for this line (quantity * price)."""
         return self.quantity * self.unit_price
 
@@ -1367,7 +1383,7 @@ class Tax(models.Model):
         on_delete=models.PROTECT,
     )
 
-    def compute_amount(self):
+    def compute_amount(self) -> int:
         """Auto-assign and return the total amount for this tax."""
         self.amount = self.base_amount * self.aliquot / 100
         return self.amount

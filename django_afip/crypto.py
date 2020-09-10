@@ -60,7 +60,3 @@ def create_csr(key_file, organization_name, common_name, serial_number, file_):
     req.sign(key, "md5")
 
     file_.write(crypto.dump_certificate_request(crypto.FILETYPE_PEM, req))
-
-
-def parse_certificate(file_):
-    return crypto.load_certificate(crypto.FILETYPE_PEM, file_)
