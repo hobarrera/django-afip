@@ -1,11 +1,11 @@
 import pytest
 from django.test import TestCase
 
-from django_afip import factories
 from django_afip import models
 
 
 @pytest.mark.live
+@pytest.mark.usefixtures("set_live_afip_token")
 class LiveAfipTestCase(TestCase):
     """
     Base class for AFIP-WS related tests.
@@ -20,13 +20,8 @@ class LiveAfipTestCase(TestCase):
 
     def setUp(self):
         """Save a TaxPayer and Ticket into the database."""
-        LiveAfipTestCase.taxpayer = factories.TaxPayerFactory(pk=1)
 
-        if not LiveAfipTestCase.ticket:
-            ticket = models.AuthTicket.objects.get_any_active("wsfe")
-            LiveAfipTestCase.ticket = ticket
-
-        LiveAfipTestCase.ticket.save()
+        self.set_live_afip_token()
 
 
 class PopulatedLiveAfipTestCase(LiveAfipTestCase):
