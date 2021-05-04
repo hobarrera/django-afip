@@ -14,7 +14,7 @@ jobs:
       matrix:
         python: [ '3.6', '3.7', '3.8' ]
         db: [ postgres, mysql, sqlite ]
-        django: [ '22', '30', '31' ]
+        django: [ '22', '31', '32' ]
     name: django-${{ matrix.django }}, python${{ matrix.python }}, ${{ matrix.db }}
     steps:
       - uses: actions/checkout@master

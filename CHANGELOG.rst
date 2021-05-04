@@ -4,6 +4,12 @@ Changelog
 This file contains a brief summary of new features and dependency changes or
 releases, in reverse chronological order.
 
+9.0.0
+-----
+
+* Dropped support for Django 3.0.
+* Add support for Django 3.2.
+
 8.0.4
 -----
 
